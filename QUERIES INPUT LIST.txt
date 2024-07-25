@@ -1,0 +1,124 @@
+QUERY 1 
+---------------
+
+WITH cte1 AS (
+SELECT
+c.customer,
+ROUND(SUM(net_sales)/1000000,2) AS net_sales_millions
+FROM gdb0041.net_sales n
+JOIN dim_customer c
+ON c.customer_code = n.customer_code
+WHERE n.fiscal_year=2021
+GROUP BY c.customer
+)
+
+SELECT
+*,
+net_sales_millions*100/SUM(net_sales_millions) OVER() as percentage
+FROM cte1
+ORDER BY net_sales_millions DESC
+
+===================================================================================================
+
+QUERY 2 
+-------------
+
+WITH forecast_error_table AS
+(SELECT
+      ae.customer_code,
+      SUM(ae.sold_quantity) AS total_sold_quantity,
+      SUM(ae.forecast_quantity) AS total_forecast_quantity,
+      SUM((forecast_quantity-sold_quantity)) AS net_error,
+      SUM((forecast_quantity-sold_quantity))*100/SUM(forecast_quantity) AS net_error_pct,
+      SUM(ABS(forecast_quantity-sold_quantity)) AS absolute_error,
+      SUM(ABS(forecast_quantity-sold_quantity))*100/SUM(forecast_quantity) AS absolute_error_pct
+FROM gdb0041.fact_actual_estimate ae
+WHERE ae.fiscal_year=2021
+GROUP BY ae.customer_code
+)
+
+SELECT
+e.*,
+c.customer,
+c.market,
+IF(absolute_error_pct > 100,0,100-absolute_error_pct) AS forecast_accuracy
+FROM forecast_error_table e
+JOIN dim_customer c
+USING (customer_code)
+ORDER BY forecast_accuracy DESC
+
+=======================================================================================================
+
+
+QUERY 3
+-------------
+
+
+WITH cte1 AS (
+SELECT
+c.region,
+c.customer,
+ROUND(SUM(net_sales)/1000000,2) AS net_sales_millions
+FROM gdb0041.net_sales n
+JOIN dim_customer c
+ON c.customer_code = n.customer_code
+WHERE n.fiscal_year=2021
+GROUP BY c.region,c.customer
+)
+
+SELECT
+*,
+net_sales_millions*100/SUM(net_sales_millions) OVER(PARTITION BY region) as pct_share_region
+FROM cte1
+ORDER BY region,net_sales_millions DESC
+
+=================================================================================================
+
+
+QUERY 4
+-----------
+
+# Here a table dimdate is created to get data faster rather than join using stored functions
+SELECT 
+      s.date,s.product_code,
+      p.product,p.variant,s.sold_quantity,
+      g.gross_price,
+      ROUND(g.gross_price*s.sold_quantity,2) as gross_price_total,
+      pre.pre_invoice_discount_pct
+FROM gdb0041.fact_sales_monthly s
+JOIN dim_product p
+    ON p.product_code = s.product_code
+JOIN dim_date dt
+    ON dt.calender_date = s.date
+JOIN fact_gross_price g
+    ON 
+    g.product_code = s.product_code AND
+	g.fiscal_year = dt.fiscal_year
+JOIN fact_pre_invoice_deductions pre
+ON 
+   pre.customer_code=s.customer_code AND
+   pre.fiscal_year= dt.fiscal_year
+WHERE
+	 dt.fiscal_year=2021
+LIMIT 1000000;
+
+=====================================================================================
+
+QUERY 5
+-------------
+
+
+# here directly factsales fiscal year is used and Databaseview created salespreinvdisc
+
+SELECT 
+*,
+(1 - pre_invoice_discount_pct)*gross_price_total AS net_invoice_sales,
+(po.discounts_pct+po.other_deductions_pct) AS post_invoice_discount_pct
+FROM sales_preinv_discount s
+JOIN fact_post_invoice_deductions po
+ON 
+  po.customer_code = s.customer_code AND
+  po.date = s.date AND
+  po.product_code = s.product_code
+
+========================================================================================
